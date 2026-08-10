@@ -1,0 +1,181 @@
+diff --git a/gateway/run.py b/gateway/run.py
+index 24d501b..b26de32 100644
+--- a/gateway/run.py
++++ b/gateway/run.py
+@@ -4201,6 +4201,29 @@ class TurnRunner:
+         except Exception as _ack_err:
+             logger.debug("voice ack schedule failed: %s", _ack_err)
+ 
++    def gateway_tool_start_callback(self, call_id, tool_name, args):
++        ctx = self._ctx
++        try:
++            adapter = self._runner._adapter_for_source(ctx.source)
++            if adapter is not None and hasattr(adapter, "presence_tool_started"):
++                adapter.presence_tool_started(
++                    ctx.session_key, ctx.run_generation, call_id
++                )
++        except Exception:
++            logger.debug("presence tool-start hook failed", exc_info=True)
++        self.voice_ack_callback(call_id, tool_name, args)
++
++    def gateway_tool_complete_callback(self, call_id, tool_name, args, result):
++        ctx = self._ctx
++        try:
++            adapter = self._runner._adapter_for_source(ctx.source)
++            if adapter is not None and hasattr(adapter, "presence_tool_finished"):
++                adapter.presence_tool_finished(
++                    ctx.session_key, ctx.run_generation, call_id
++                )
++        except Exception:
++            logger.debug("presence tool-finish hook failed", exc_info=True)
++
+     def _step_callback_sync(self, iteration: int, prev_tools: list) -> None:
+         ctx = self._ctx
+         if not ctx._run_still_current():
+@@ -4742,10 +4765,23 @@ class TurnRunner:
+             )
+             else None
+         )
++        _presence_tool_adapter = self._runner._adapter_for_source(ctx.source)
+         # Discord voice verbal-ack hook (fires once per turn on first tool
+         # call; armed only when in a voice channel with the mixer running).
+         agent.tool_start_callback = (
+-            ctx.voice_ack_callback if ctx._voice_ack_guild[0] is not None else None
++            self.gateway_tool_start_callback
++            if ctx._voice_ack_guild[0] is not None
++            or (
++                _presence_tool_adapter is not None
++                and hasattr(_presence_tool_adapter, "presence_tool_started")
++            )
++            else None
++        )
++        agent.tool_complete_callback = (
++            self.gateway_tool_complete_callback
++            if _presence_tool_adapter is not None
++            and hasattr(_presence_tool_adapter, "presence_tool_finished")
++            else None
+         )
+         agent.step_callback = ctx._step_callback_sync if ctx._hooks_ref.loaded_hooks else None
+         agent.stream_delta_callback = _stream_delta_cb
+@@ -15559,6 +15595,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
+         _claim_state.turn.started_ts = time.time()
+         self._persist_active_agents()
+         _run_generation = self._begin_session_run_generation(_quick_key)
++        _presence_adapter = self._adapter_for_source(source)
++        if _presence_adapter is not None and hasattr(
++            _presence_adapter, "presence_turn_started"
++        ):
++            try:
++                _presence_adapter.presence_turn_started(
++                    _quick_key, _run_generation
++                )
++            except Exception:
++                logger.debug("presence turn-start hook failed", exc_info=True)
+ 
+         try:
+             _agent_result = await self._handle_message_with_agent(event, source, _quick_key, _run_generation)
+@@ -15592,6 +15638,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
+                 logger.debug("goal continuation hook failed: %s", _goal_exc)
+             return _agent_result
+         finally:
++            try:
++                _presence_finish_adapter = self._adapter_for_source(source)
++                if _presence_finish_adapter is not None and hasattr(
++                    _presence_finish_adapter, "presence_turn_finished"
++                ):
++                    _presence_finish_adapter.presence_turn_finished(
++                        _quick_key, _run_generation
++                    )
++            except Exception:
++                logger.debug("presence turn-finish hook failed", exc_info=True)
+             # MoA one-shot restore must run on EVERY exit path, not just
+             # success. The restore data lives on the per-turn event object
+             # (_moa_restore_override), which is discarded once the event goes
+diff --git a/plugins/platforms/discord/adapter.py b/plugins/platforms/discord/adapter.py
+index 56cb90a..3577285 100644
+--- a/plugins/platforms/discord/adapter.py
++++ b/plugins/platforms/discord/adapter.py
+@@ -165,6 +165,7 @@ from gateway.platforms.base import (
+     validate_inbound_media_size,
+ )
+ from tools.url_safety import is_safe_url
++from plugins.platforms.discord.presence import DiscordPresenceController
+ 
+ 
+ async def _read_url_image_with_redirect_guard(
+@@ -1114,6 +1115,7 @@ class DiscordAdapter(BasePlatformAdapter):
+         # Mirrors the Telegram #58563 fix. Entries are dropped on finalize.
+         self._last_overflow_preview: Dict[tuple, str] = {}
+         self._warned_fail_closed_default = False
++        self._presence = DiscordPresenceController(self)
+ 
+     def _config_value(
+         self, key: str, default: Any, *, env_key: Optional[str] = None
+@@ -1332,6 +1334,11 @@ class DiscordAdapter(BasePlatformAdapter):
+                 await adapter_self._resolve_allowed_usernames()
+                 adapter_self._ready_event.set()
+ 
++                try:
++                    await adapter_self._presence.reassert()
++                except Exception:
++                    logger.debug("Discord presence reassert failed", exc_info=True)
++
+                 if adapter_self._post_connect_task and not adapter_self._post_connect_task.done():
+                     adapter_self._post_connect_task.cancel()
+                 adapter_self._post_connect_task = asyncio.create_task(
+@@ -1770,6 +1777,10 @@ class DiscordAdapter(BasePlatformAdapter):
+     async def disconnect(self) -> None:
+         """Disconnect from Discord."""
+         self._disconnecting = True
++        try:
++            await self._presence.stop()
++        except Exception:
++            logger.debug("Discord presence shutdown failed", exc_info=True)
+         # Cancel the liveness probe first so it can't fire a spurious fatal
+         # error / reconnect while we're intentionally tearing the adapter down.
+         await self._cancel_liveness_task()
+@@ -1817,6 +1828,22 @@ class DiscordAdapter(BasePlatformAdapter):
+ 
+         logger.info("[%s] Disconnected", self.name)
+ 
++    def presence_turn_started(self, session_key: str, generation: Any) -> None:
++        self._presence.turn_started(session_key, generation)
++
++    def presence_turn_finished(self, session_key: str, generation: Any) -> None:
++        self._presence.turn_finished(session_key, generation)
++
++    def presence_tool_started(
++        self, session_key: str, generation: Any, call_id: Any
++    ) -> None:
++        self._presence.tool_started(session_key, generation, call_id)
++
++    def presence_tool_finished(
++        self, session_key: str, generation: Any, call_id: Any
++    ) -> None:
++        self._presence.tool_finished(session_key, generation, call_id)
++
+     def _command_sync_state_path(self) -> _Path:
+         from hermes_constants import get_hermes_home
+ 
+@@ -7105,6 +7132,10 @@ class DiscordAdapter(BasePlatformAdapter):
+                     )
+             msg = await channel.send(**send_kwargs)
+             view._message = msg  # store for on_timeout expiration editing
++            try:
++                self._presence.watch_approval(session_key)
++            except Exception:
++                logger.debug("Discord approval presence hook failed", exc_info=True)
+             return SendResult(success=True, message_id=str(msg.id))
+ 
+         except Exception as e:
+@@ -7276,6 +7307,10 @@ class DiscordAdapter(BasePlatformAdapter):
+             msg = await channel.send(content=content, embed=embed, view=view) if view else await channel.send(content=content, embed=embed)
+             if view:
+                 view._message = msg  # store for on_timeout expiration editing
++            try:
++                self._presence.watch_response(session_key)
++            except Exception:
++                logger.debug("Discord response presence hook failed", exc_info=True)
+             return SendResult(success=True, message_id=str(msg.id))
+         except Exception as e:
+             logger.warning("[%s] send_clarify failed: %s", self.name, e)
