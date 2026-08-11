@@ -71,7 +71,11 @@ and containers in separate ownership boundaries:
   and unified health-check;
 - `examples/runtime-contract.toml` — deployment-neutral manifest schema;
 - `requirements/ddgs-py311-linux-aarch64.lock` — hash-pinned DDGS thin
-  extension packages; and
+  extension packages;
+- `requirements/parallel-web-py311-linux-aarch64.lock` — the Parallel SDK
+  without core-owned shared dependencies;
+- `requirements/edge-tts-py311-linux-aarch64.lock` — Edge TTS plus its
+  core-absent `tabulate` dependency; and
 - `tests/test_runtime_contract.py` — focused contract tests.
 
 The `check` command is observation-only. `attest-extension` writes only its

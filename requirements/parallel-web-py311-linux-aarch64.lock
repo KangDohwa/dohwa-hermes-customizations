@@ -1,0 +1,4 @@
+# Python 3.11, Linux aarch64; pure extension-only package.
+# Shared dependencies (anyio, distro, httpx, pydantic, sniffio,
+# typing-extensions) are supplied by the frozen Hermes core.
+parallel-web==0.4.2 --hash=sha256:aa3a4a9aecc08972c5ce9303271d4917903373dff4dd277d9a3e30f9cff53346
