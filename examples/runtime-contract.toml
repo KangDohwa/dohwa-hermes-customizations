@@ -1,0 +1,46 @@
+schema_version = 1
+
+[[python_runtimes]]
+name = "hermes-core"
+executable = "/srv/hermes/current/.venv/bin/python"
+expected = "3.11"
+
+[[python_scripts]]
+name = "stdlib-job"
+path = "/srv/hermes-data/scripts/job.py"
+runtime = "hermes-core"
+stdlib_only = true
+allow_imports = ["local_package"]
+source_paths = ["/srv/hermes-data/local_package"]
+
+[[shell_scripts]]
+name = "shell-job"
+path = "/srv/hermes-data/scripts/job.sh"
+shell = "/usr/bin/bash"
+
+[[extensions]]
+name = "ddgs-web-search-staged"
+path = "/srv/hermes-data/runtime-extensions/web-search-py311/releases/BUILD"
+contract = "/srv/hermes-data/runtime-extensions/web-search-py311/releases/BUILD/.contract.json"
+contract_sha256 = "PINNED_CONTRACT_SHA256"
+source_commit = "PINNED_CUSTOMIZATIONS_COMMIT"
+lockfile = "/path/to/ddgs-py311-linux-aarch64.lock"
+runtime = "hermes-core"
+probe_imports = ["ddgs", "primp", "lxml", "h2", "brotli"]
+read_only = true
+
+[[commands]]
+name = "host-cli"
+executable = "/usr/bin/example"
+
+[[containers]]
+name = "service"
+engine = "/usr/bin/docker"
+sudo = false
+expected_image = "sha256:PINNED_IMAGE_ID"
+expected_state = "running"
+
+[[boundaries]]
+name = "agent-profile"
+kind = "directory"
+path = "/srv/hermes-data/profiles/example"
