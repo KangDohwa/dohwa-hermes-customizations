@@ -98,17 +98,23 @@ async def test_explicit_unavailable_extract_backend_does_not_dispatch_fallback(m
     assert "extract_backend" in result["error"]
 
 
-def _configure_search_pair(monkeypatch, primary_response):
+def _configure_search_pair(
+    monkeypatch,
+    primary_response,
+    *,
+    primary_name="tavily",
+    fallback_name="ddgs",
+):
     from agent import web_search_registry
     from tools import web_tools
 
     primary = MagicMock()
-    primary.name = "tavily"
+    primary.name = primary_name
     primary.supports_search.return_value = True
     primary.search.return_value = primary_response
 
     fallback = MagicMock()
-    fallback.name = "ddgs"
+    fallback.name = fallback_name
     fallback.display_name = "DDGS"
     fallback.supports_search.return_value = True
     fallback.is_available.return_value = True
@@ -129,15 +135,15 @@ def _configure_search_pair(monkeypatch, primary_response):
         web_tools,
         "_load_web_config",
         lambda: {
-            "search_backend": "tavily",
-            "search_fallback_backend": "ddgs",
+            "search_backend": primary_name,
+            "search_fallback_backend": fallback_name,
         },
     )
     monkeypatch.setattr(web_tools, "_ensure_web_plugins_loaded", lambda: None)
     monkeypatch.setattr(
         web_search_registry,
         "get_provider",
-        lambda name: {"tavily": primary, "ddgs": fallback}.get(name),
+        lambda name: {primary_name: primary, fallback_name: fallback}.get(name),
     )
     active = MagicMock(name="active_provider_walk")
     monkeypatch.setattr(web_search_registry, "get_active_search_provider", active)
@@ -194,6 +200,56 @@ def test_nonretryable_primary_failure_does_not_fallback(monkeypatch):
     assert result["error_code"] == "authentication_failed"
 
 
+def test_non_tavily_primary_does_not_use_ddgs_fallback(monkeypatch):
+    web_tools, primary, fallback, active = _configure_search_pair(
+        monkeypatch,
+        {"success": True, "data": {"web": []}},
+        primary_name="parallel",
+    )
+
+    result = json.loads(web_tools.web_search_tool("parallel probe", limit=1))
+
+    primary.search.assert_called_once_with("parallel probe", 1)
+    fallback.search.assert_not_called()
+    active.assert_not_called()
+    assert result == {"success": True, "data": {"web": []}}
+
+
+def test_tavily_does_not_use_non_ddgs_fallback(monkeypatch):
+    web_tools, primary, fallback, active = _configure_search_pair(
+        monkeypatch,
+        {"success": True, "data": {"web": []}},
+        fallback_name="exa",
+    )
+
+    result = json.loads(web_tools.web_search_tool("exa fallback probe", limit=1))
+
+    primary.search.assert_called_once_with("exa fallback probe", 1)
+    fallback.search.assert_not_called()
+    active.assert_not_called()
+    assert result == {"success": True, "data": {"web": []}}
+
+
+def test_nonretryable_error_code_overrides_retryable_flag(monkeypatch):
+    web_tools, primary, fallback, active = _configure_search_pair(
+        monkeypatch,
+        {
+            "success": False,
+            "error": "unauthorized",
+            "error_code": "authentication_failed",
+            "retryable": True,
+        },
+    )
+
+    result = json.loads(web_tools.web_search_tool("contradictory auth probe", limit=1))
+
+    primary.search.assert_called_once_with("contradictory auth probe", 1)
+    fallback.search.assert_not_called()
+    active.assert_not_called()
+    assert result["success"] is False
+    assert result["error_code"] == "authentication_failed"
+
+
 def test_empty_primary_results_use_explicit_search_fallback(monkeypatch):
     web_tools, primary, fallback, active = _configure_search_pair(
         monkeypatch,
@@ -207,6 +263,30 @@ def test_empty_primary_results_use_explicit_search_fallback(monkeypatch):
     active.assert_not_called()
     assert result["success"] is True
     assert result["fallback"]["reason"] == "no_results"
+
+
+def test_malformed_fallback_success_fails_closed(monkeypatch):
+    web_tools, primary, fallback, active = _configure_search_pair(
+        monkeypatch,
+        {
+            "success": False,
+            "error": "rate limited",
+            "error_code": "rate_limited",
+            "retryable": True,
+        },
+    )
+    fallback.search.return_value = {"success": True}
+
+    result = json.loads(web_tools.web_search_tool("fallback schema probe", limit=1))
+
+    primary.search.assert_called_once_with("fallback schema probe", 1)
+    fallback.search.assert_called_once_with("fallback schema probe", 1)
+    active.assert_not_called()
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_response"
+    assert result["retryable"] is False
+    assert result["fallback"]["reason"] == "rate_limited"
+    assert result["fallback"]["success"] is False
 
 
 @pytest.mark.parametrize(

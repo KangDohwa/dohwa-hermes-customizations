@@ -70,7 +70,7 @@ index e2a9d7b40..a3af37655 100644
      def extract(self, urls: List[str], **kwargs: Any) -> List[Dict[str, Any]]:
          """Extract content from one or more URLs via Tavily.
 diff --git a/tools/web_tools.py b/tools/web_tools.py
-index 31c425f9a..8035b5152 100644
+index 31c425f9a..14a5b590c 100644
 --- a/tools/web_tools.py
 +++ b/tools/web_tools.py
 @@ -279,9 +279,13 @@ def _get_search_backend() -> str:
@@ -139,7 +139,7 @@ index 31c425f9a..8035b5152 100644
              else:
                  response_data = {
                      "success": False,
-@@ -721,6 +740,62 @@ def web_search_tool(query: str, limit: int = 5) -> str:
+@@ -721,6 +740,90 @@ def web_search_tool(query: str, limit: int = 5) -> str:
              )
              response_data = provider.search(query, limit)
  
@@ -160,16 +160,22 @@ index 31c425f9a..8035b5152 100644
 +                    }
 +                elif not web_results:
 +                    fallback_reason = "no_results"
-+            elif response_data.get("retryable") is True:
-+                fallback_reason = response_data.get("error_code") or "retryable_failure"
++            elif (
++                response_data.get("retryable") is True
++                and response_data.get("error_code") in {
++                    "rate_limited", "provider_unavailable", "timeout", "network_error",
++                }
++            ):
++                fallback_reason = response_data["error_code"]
 +
 +            fallback_name = (
 +                _load_web_config().get("search_fallback_backend") or ""
 +            ).lower().strip()
 +            if (
 +                fallback_reason
-+                and fallback_name
-+                and fallback_name != provider.name
++                and specific == "tavily"
++                and provider.name == "tavily"
++                and fallback_name == "ddgs"
 +            ):
 +                fallback_provider = _wsp_get_provider(fallback_name)
 +                if (
@@ -188,8 +194,30 @@ index 31c425f9a..8035b5152 100644
 +                        "reason": fallback_reason,
 +                    }
 +                    if fallback_response.get("success") is True:
-+                        fallback_response["fallback"] = fallback_meta
-+                        response_data = fallback_response
++                        fallback_payload = fallback_response.get("data")
++                        fallback_results = (
++                            fallback_payload.get("web")
++                            if isinstance(fallback_payload, dict)
++                            else None
++                        )
++                        if not isinstance(fallback_results, list):
++                            fallback_error = (
++                                "Web search fallback provider returned an invalid response"
++                            )
++                            response_data = {
++                                "success": False,
++                                "error": fallback_error,
++                                "error_code": "invalid_response",
++                                "retryable": False,
++                                "fallback": {
++                                    **fallback_meta,
++                                    "success": False,
++                                    "error": fallback_error,
++                                },
++                            }
++                        else:
++                            fallback_response["fallback"] = fallback_meta
++                            response_data = fallback_response
 +                    else:
 +                        response_data["fallback"] = {
 +                            **fallback_meta,
@@ -202,7 +230,7 @@ index 31c425f9a..8035b5152 100644
          debug_call_data["results_count"] = len(response_data.get("data", {}).get("web", []))
          result_json = json.dumps(response_data, indent=2, ensure_ascii=False)
          debug_call_data["final_response_size"] = len(result_json)
-@@ -854,6 +929,9 @@ async def web_extract_tool(
+@@ -854,6 +957,9 @@ async def web_extract_tool(
          if not safe_urls:
              results = []
          else:
@@ -212,7 +240,7 @@ index 31c425f9a..8035b5152 100644
              backend = _get_extract_backend()
  
              # All seven providers (brave-free, ddgs, searxng, exa, parallel,
-@@ -891,7 +969,7 @@ async def web_extract_tool(
+@@ -891,7 +997,7 @@ async def web_extract_tool(
                          },
                          ensure_ascii=False,
                      )
@@ -221,7 +249,7 @@ index 31c425f9a..8035b5152 100644
                  if provider is None:
                      # If the configured backend is a bundled web plugin the
                      # user explicitly disabled, the backend is set correctly
-@@ -914,15 +992,16 @@ async def web_extract_tool(
+@@ -914,15 +1020,16 @@ async def web_extract_tool(
                              },
                              ensure_ascii=False,
                          )
