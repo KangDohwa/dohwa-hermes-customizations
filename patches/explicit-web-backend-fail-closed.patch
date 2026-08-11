@@ -1,5 +1,76 @@
+diff --git a/plugins/web/tavily/provider.py b/plugins/web/tavily/provider.py
+index e2a9d7b40..a3af37655 100644
+--- a/plugins/web/tavily/provider.py
++++ b/plugins/web/tavily/provider.py
+@@ -61,10 +61,52 @@ def _tavily_request(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+     return response.json()
+ 
+ 
++def _tavily_error_response(exc: Exception, *, operation: str) -> Dict[str, Any]:
++    """Classify Tavily failures without relying on error-string matching."""
++    import httpx
++
++    error_code = "provider_error"
++    retryable = False
++    if isinstance(exc, httpx.HTTPStatusError):
++        status = exc.response.status_code
++        if status in {401, 403}:
++            error_code = "authentication_failed"
++        elif status == 429:
++            error_code, retryable = "rate_limited", True
++        elif 500 <= status < 600:
++            error_code, retryable = "provider_unavailable", True
++        else:
++            error_code = "http_error"
++    elif isinstance(exc, httpx.TimeoutException):
++        error_code, retryable = "timeout", True
++    elif isinstance(exc, httpx.NetworkError):
++        error_code, retryable = "network_error", True
++    elif isinstance(exc, ValueError):
++        error_code = "configuration_error"
++
++    return {
++        "success": False,
++        "error": f"Tavily {operation} failed: {exc}",
++        "error_code": error_code,
++        "retryable": retryable,
++    }
++
++
+ def _normalize_tavily_search_results(response: Dict[str, Any]) -> Dict[str, Any]:
+     """Map Tavily ``/search`` response to ``{success, data: {web: [...]}}``."""
++    results = response.get("results")
++    if not isinstance(results, list) or not all(
++        isinstance(result, dict) for result in results
++    ):
++        return {
++            "success": False,
++            "error": "Tavily search returned an invalid response",
++            "error_code": "invalid_response",
++            "retryable": False,
++        }
++
+     web_results = []
+-    for i, result in enumerate(response.get("results", [])):
++    for i, result in enumerate(results):
+         web_results.append(
+             {
+                 "title": result.get("title", ""),
+@@ -169,11 +211,9 @@ class TavilyWebSearchProvider(WebSearchProvider):
+                 },
+             )
+             return _normalize_tavily_search_results(raw)
+-        except ValueError as exc:
+-            return {"success": False, "error": str(exc)}
+         except Exception as exc:  # noqa: BLE001 — including httpx errors
+             logger.warning("Tavily search error: %s", exc)
+-            return {"success": False, "error": f"Tavily search failed: {exc}"}
++            return _tavily_error_response(exc, operation="search")
+ 
+     def extract(self, urls: List[str], **kwargs: Any) -> List[Dict[str, Any]]:
+         """Extract content from one or more URLs via Tavily.
 diff --git a/tools/web_tools.py b/tools/web_tools.py
-index 31c425f9a..d2abd0f7d 100644
+index 31c425f9a..14a5b590c 100644
 --- a/tools/web_tools.py
 +++ b/tools/web_tools.py
 @@ -279,9 +279,13 @@ def _get_search_backend() -> str:
@@ -18,7 +89,22 @@ index 31c425f9a..d2abd0f7d 100644
  
  
  def _get_extract_backend() -> str:
-@@ -682,13 +686,15 @@ def web_search_tool(query: str, limit: int = 5) -> str:
+@@ -291,8 +295,13 @@ def _get_extract_backend() -> str:
+     1. ``web.extract_backend`` (per-capability override)
+     2. ``web.backend`` (shared fallback — existing behavior)
+     3. Auto-detect from env vars
++    Explicit selections stay selected when unavailable so extract dispatch
++    fails closed.
+     """
+-    return _get_capability_backend("extract")
++    specific = (
++        _load_web_config().get("extract_backend") or ""
++    ).lower().strip()
++    return specific or _get_capability_backend("extract")
+ 
+ 
+ def _get_capability_backend(capability: str) -> str:
+@@ -682,13 +691,15 @@ def web_search_tool(query: str, limit: int = 5) -> str:
              _disabled_web_plugin_for,
          )
  
@@ -38,7 +124,7 @@ index 31c425f9a..d2abd0f7d 100644
  
          if provider is None:
              # A bundled web plugin the user explicitly disabled looks
-@@ -706,6 +712,14 @@ def web_search_tool(query: str, limit: int = 5) -> str:
+@@ -706,6 +717,14 @@ def web_search_tool(query: str, limit: int = 5) -> str:
                          "(or remove it from plugins.disabled)."
                      ),
                  }
@@ -53,3 +139,138 @@ index 31c425f9a..d2abd0f7d 100644
              else:
                  response_data = {
                      "success": False,
+@@ -721,6 +740,90 @@ def web_search_tool(query: str, limit: int = 5) -> str:
+             )
+             response_data = provider.search(query, limit)
+ 
++            fallback_reason = None
++            if response_data.get("success") is True:
++                response_payload = response_data.get("data")
++                web_results = (
++                    response_payload.get("web")
++                    if isinstance(response_payload, dict)
++                    else None
++                )
++                if not isinstance(web_results, list):
++                    response_data = {
++                        "success": False,
++                        "error": "Web search provider returned an invalid response",
++                        "error_code": "invalid_response",
++                        "retryable": False,
++                    }
++                elif not web_results:
++                    fallback_reason = "no_results"
++            elif (
++                response_data.get("retryable") is True
++                and response_data.get("error_code") in {
++                    "rate_limited", "provider_unavailable", "timeout", "network_error",
++                }
++            ):
++                fallback_reason = response_data["error_code"]
++
++            fallback_name = (
++                _load_web_config().get("search_fallback_backend") or ""
++            ).lower().strip()
++            if (
++                fallback_reason
++                and specific == "tavily"
++                and provider.name == "tavily"
++                and fallback_name == "ddgs"
++            ):
++                fallback_provider = _wsp_get_provider(fallback_name)
++                if (
++                    fallback_provider is not None
++                    and fallback_provider.supports_search()
++                    and fallback_provider.is_available()
++                ):
++                    logger.warning(
++                        "Web search fallback %s -> %s (%s)",
++                        provider.name, fallback_provider.name, fallback_reason,
++                    )
++                    fallback_response = fallback_provider.search(query, limit)
++                    fallback_meta = {
++                        "from": provider.name,
++                        "to": fallback_provider.name,
++                        "reason": fallback_reason,
++                    }
++                    if fallback_response.get("success") is True:
++                        fallback_payload = fallback_response.get("data")
++                        fallback_results = (
++                            fallback_payload.get("web")
++                            if isinstance(fallback_payload, dict)
++                            else None
++                        )
++                        if not isinstance(fallback_results, list):
++                            fallback_error = (
++                                "Web search fallback provider returned an invalid response"
++                            )
++                            response_data = {
++                                "success": False,
++                                "error": fallback_error,
++                                "error_code": "invalid_response",
++                                "retryable": False,
++                                "fallback": {
++                                    **fallback_meta,
++                                    "success": False,
++                                    "error": fallback_error,
++                                },
++                            }
++                        else:
++                            fallback_response["fallback"] = fallback_meta
++                            response_data = fallback_response
++                    else:
++                        response_data["fallback"] = {
++                            **fallback_meta,
++                            "success": False,
++                            "error": fallback_response.get(
++                                "error", "fallback search failed"
++                            ),
++                        }
++
+         debug_call_data["results_count"] = len(response_data.get("data", {}).get("web", []))
+         result_json = json.dumps(response_data, indent=2, ensure_ascii=False)
+         debug_call_data["final_response_size"] = len(result_json)
+@@ -854,6 +957,9 @@ async def web_extract_tool(
+         if not safe_urls:
+             results = []
+         else:
++            specific = (
++                _load_web_config().get("extract_backend") or ""
++            ).lower().strip()
+             backend = _get_extract_backend()
+ 
+             # All seven providers (brave-free, ddgs, searxng, exa, parallel,
+@@ -891,7 +997,7 @@ async def web_extract_tool(
+                         },
+                         ensure_ascii=False,
+                     )
+-                provider = get_active_extract_provider()
++                provider = None if specific else get_active_extract_provider()
+                 if provider is None:
+                     # If the configured backend is a bundled web plugin the
+                     # user explicitly disabled, the backend is set correctly
+@@ -914,15 +1020,16 @@ async def web_extract_tool(
+                             },
+                             ensure_ascii=False,
+                         )
++                    error = (
++                        f"web.extract_backend is set to '{specific}', but it "
++                        "is unavailable or does not support extraction."
++                        if specific else
++                        "No web extract provider configured. "
++                        "Set web.extract_backend to firecrawl, tavily, exa, "
++                        "or parallel."
++                    )
+                     return json.dumps(
+-                        {
+-                            "success": False,
+-                            "error": (
+-                                "No web extract provider configured. "
+-                                "Set web.extract_backend to firecrawl, "
+-                                "tavily, exa, or parallel."
+-                            ),
+-                        },
++                        {"success": False, "error": error},
+                         ensure_ascii=False,
+                     )
+ 

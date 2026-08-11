@@ -37,10 +37,11 @@ runtime.
 The DDGS lock intentionally excludes `click`, `httpx`, and `socksio`; those are
 shared from the frozen Hermes core. The Parallel lock owns only `parallel-web`;
 `anyio`, `distro`, `httpx`, `pydantic`, `sniffio`, and `typing-extensions` stay
-core-owned. The Edge TTS lock owns `edge-tts` and `tabulate`; `aiohttp`,
-`certifi`, and `typing-extensions` stay core-owned. Keep all three extensions
-separate so a capability can be removed without changing another capability's
-attestation.
+core-owned. The Exa lock owns only `exa-py`; `httpcore`, `httpx`, `openai`,
+`pydantic`, `python-dotenv`, `requests`, and `typing-extensions` stay core-owned.
+The Edge TTS lock owns `edge-tts` and `tabulate`; `aiohttp`, `certifi`, and
+`typing-extensions` stay core-owned. Keep all four extensions separate so a
+capability can be removed without changing another capability's attestation.
 
 The checker rejects any extension package whose normalized distribution name
 overlaps with the core. It also rejects unanchored contracts, generated

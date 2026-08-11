@@ -40,11 +40,14 @@ payloads fail safely without crashing the guard.
 
 ## Explicit web backend fail-closed behavior
 
-`patches/explicit-web-backend-fail-closed.patch` preserves an explicit
-`web.search_backend` selection when that provider is unavailable and prevents
-the search dispatcher from walking to another provider.
-`tests/test_web_backend_fail_closed.py` verifies both the fail-closed path and
-the unchanged auto-detection fallback used when no search backend is explicit.
+`patches/explicit-web-backend-fail-closed.patch` preserves explicit
+`web.search_backend` and `web.extract_backend` selections when unavailable,
+preventing credential-driven provider walks. Search may use only the explicitly
+configured `web.search_fallback_backend`, and only after a typed retryable
+failure or a successful zero-result response. Tavily classifies HTTP auth,
+rate-limit, server, network, and timeout failures without string matching.
+`tests/test_web_backend_fail_closed.py` verifies the fail-closed paths, bounded
+fallback edge, and unchanged auto-detection used when no backend is explicit.
 
 ## Verify against clean upstream
 
@@ -74,6 +77,8 @@ and containers in separate ownership boundaries:
   extension packages;
 - `requirements/parallel-web-py311-linux-aarch64.lock` — the Parallel SDK
   without core-owned shared dependencies;
+- `requirements/exa-py311-linux-aarch64.lock` — the Exa SDK without
+  core-owned shared dependencies;
 - `requirements/edge-tts-py311-linux-aarch64.lock` — Edge TTS plus its
   core-absent `tabulate` dependency; and
 - `tests/test_runtime_contract.py` — focused contract tests.

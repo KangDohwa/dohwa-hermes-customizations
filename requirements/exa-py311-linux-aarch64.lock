@@ -1,0 +1,4 @@
+# Python 3.11, Linux aarch64; pure extension-only package.
+# Shared dependencies (httpcore, httpx, openai, pydantic, python-dotenv,
+# requests, typing-extensions) are supplied by the frozen Hermes core.
+exa-py==2.10.2 --hash=sha256:ecb2a7581f4b7a8aeb6b434acce1bbc40f92ed1d4126b2aa6029913acd904a47 --hash=sha256:f781f30b199f1102333384728adae64bb15a6bbcabfa97e91fd705f90acffc45
