@@ -45,6 +45,24 @@ The script checks patch applicability and whitespace, installs the overlay and
 focused tests into the temporary worktree, compiles affected modules, and runs
 the focused test set.
 
+## Runtime dependency contract
+
+The repository also carries a read-only contract for keeping Hermes core,
+optional Python extensions, scheduled scripts, external CLIs, agent profiles,
+and containers in separate ownership boundaries:
+
+- `scripts/runtime_contract.py` — Python 3.11 preflight, extension attestation,
+  and unified health-check;
+- `examples/runtime-contract.toml` — deployment-neutral manifest schema;
+- `requirements/ddgs-py311-linux-aarch64.lock` — hash-pinned DDGS thin
+  extension packages; and
+- `tests/test_runtime_contract.py` — focused contract tests.
+
+The `check` command is observation-only. `attest-extension` writes only its
+explicit contract output; neither command installs packages, updates components,
+creates schedules, repairs findings, or restarts the Gateway. See
+[`docs/runtime-dependency-contract.md`](docs/runtime-dependency-contract.md).
+
 ## Upgrade policy
 
 - `main` represents one currently supported upstream revision.
