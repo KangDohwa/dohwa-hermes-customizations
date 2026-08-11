@@ -30,12 +30,18 @@ trap cleanup EXIT
 git -C "$source_tree" worktree add --detach "$worktree" "$expected_commit" >/dev/null
 git -C "$worktree" apply --check "$root/patches/discord-dynamic-presence.patch"
 git -C "$worktree" apply "$root/patches/discord-dynamic-presence.patch"
+git -C "$worktree" apply --check \
+  "$root/patches/explicit-web-backend-fail-closed.patch"
+git -C "$worktree" apply \
+  "$root/patches/explicit-web-backend-fail-closed.patch"
 install -Dm644 "$root/overlays/discord_presence.py" \
   "$worktree/plugins/platforms/discord/presence.py"
 install -Dm644 "$root/tests/test_discord_presence.py" \
   "$worktree/tests/gateway/test_discord_presence.py"
 install -Dm644 "$root/tests/test_discord_presence_integration.py" \
   "$worktree/tests/gateway/test_discord_presence_integration.py"
+install -Dm644 "$root/tests/test_web_backend_fail_closed.py" \
+  "$worktree/tests/tools/test_web_backend_fail_closed.py"
 
 git -C "$worktree" diff --check
 (
@@ -44,11 +50,17 @@ git -C "$worktree" diff --check
     gateway/run.py \
     plugins/platforms/discord/adapter.py \
     plugins/platforms/discord/presence.py \
+    tools/web_tools.py \
     tests/gateway/test_discord_presence.py \
-    tests/gateway/test_discord_presence_integration.py
+    tests/gateway/test_discord_presence_integration.py \
+    tests/tools/test_web_backend_fail_closed.py
   PYTHONPATH="$worktree" "$python_bin" -m pytest -q \
+    -W error::ResourceWarning \
     tests/gateway/test_discord_presence.py \
-    tests/gateway/test_discord_presence_integration.py
+    tests/gateway/test_discord_presence_integration.py \
+    tests/tools/test_web_backend_fail_closed.py \
+    tests/tools/test_web_providers.py \
+    tests/tools/test_web_tools_config.py
 )
 
 printf 'Verified Hermes customization against %s\n' "$expected_commit"

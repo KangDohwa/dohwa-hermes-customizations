@@ -30,6 +30,14 @@ The patch preserves existing tool-progress and Discord voice-ack callbacks,
 tracks generation-aware turn/tool activity, starts approval/response presence
 only after successful sends, and cleans up presence tasks on disconnect.
 
+## Explicit web backend fail-closed behavior
+
+`patches/explicit-web-backend-fail-closed.patch` preserves an explicit
+`web.search_backend` selection when that provider is unavailable and prevents
+the search dispatcher from walking to another provider.
+`tests/test_web_backend_fail_closed.py` verifies both the fail-closed path and
+the unchanged auto-detection fallback used when no search backend is explicit.
+
 ## Verify against clean upstream
 
 The verification script creates a temporary detached worktree, so it does not

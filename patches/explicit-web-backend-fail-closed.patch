@@ -1,0 +1,55 @@
+diff --git a/tools/web_tools.py b/tools/web_tools.py
+index 31c425f9a..d2abd0f7d 100644
+--- a/tools/web_tools.py
++++ b/tools/web_tools.py
+@@ -279,9 +279,13 @@ def _get_search_backend() -> str:
+     3. Auto-detect from env vars
+ 
+     This enables using different providers for search vs extract
+-    (e.g. SearXNG for search + Firecrawl for extract).
++    (e.g. SearXNG for search + Firecrawl for extract). Explicit selections
++    stay selected when unavailable so search dispatch fails closed.
+     """
+-    return _get_capability_backend("search")
++    specific = (
++        _load_web_config().get("search_backend") or ""
++    ).lower().strip()
++    return specific or _get_capability_backend("search")
+ 
+ 
+ def _get_extract_backend() -> str:
+@@ -682,13 +686,15 @@ def web_search_tool(query: str, limit: int = 5) -> str:
+             _disabled_web_plugin_for,
+         )
+ 
++        specific = (
++            _load_web_config().get("search_backend") or ""
++        ).lower().strip()
+         backend = _get_search_backend()
+         provider = _wsp_get_provider(backend) if backend else None
+         if provider is None or not provider.supports_search():
+-            # Fall back to availability-walked active provider when the
+-            # configured backend isn't a registered search provider (typo,
+-            # uninstalled plugin, or capability mismatch).
+-            provider = get_active_search_provider()
++            # Auto-detection may walk available providers. An explicit
++            # per-capability selection must fail closed instead.
++            provider = None if specific else get_active_search_provider()
+ 
+         if provider is None:
+             # A bundled web plugin the user explicitly disabled looks
+@@ -706,6 +712,14 @@ def web_search_tool(query: str, limit: int = 5) -> str:
+                         "(or remove it from plugins.disabled)."
+                     ),
+                 }
++            elif specific:
++                response_data = {
++                    "success": False,
++                    "error": (
++                        f"web.search_backend is set to '{specific}', but it "
++                        "is unavailable or does not support search."
++                    ),
++                }
+             else:
+                 response_data = {
+                     "success": False,
