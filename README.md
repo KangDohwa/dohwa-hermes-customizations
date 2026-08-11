@@ -30,6 +30,14 @@ The patch preserves existing tool-progress and Discord voice-ack callbacks,
 tracks generation-aware turn/tool activity, starts approval/response presence
 only after successful sends, and cleans up presence tasks on disconnect.
 
+## Lifecycle guard NUL safety
+
+`patches/lifecycle-guard-nul-forward-fix.patch` preserves a known local binary
+as a local result, rejects NUL-bearing remote script payloads, and catches
+`ValueError` from bounded path reads. Its upstream regression additions verify
+that a local binary never falls through to a remote read and that remote NUL
+payloads fail safely without crashing the guard.
+
 ## Explicit web backend fail-closed behavior
 
 `patches/explicit-web-backend-fail-closed.patch` preserves an explicit

@@ -34,6 +34,10 @@ git -C "$worktree" apply --check \
   "$root/patches/explicit-web-backend-fail-closed.patch"
 git -C "$worktree" apply \
   "$root/patches/explicit-web-backend-fail-closed.patch"
+git -C "$worktree" apply --check \
+  "$root/patches/lifecycle-guard-nul-forward-fix.patch"
+git -C "$worktree" apply \
+  "$root/patches/lifecycle-guard-nul-forward-fix.patch"
 install -Dm644 "$root/overlays/discord_presence.py" \
   "$worktree/plugins/platforms/discord/presence.py"
 install -Dm644 "$root/tests/test_discord_presence.py" \
@@ -47,17 +51,20 @@ git -C "$worktree" diff --check
 (
   cd "$worktree"
   PYTHONPATH="$worktree" "$python_bin" -m py_compile \
+    cron/lifecycle_guard.py \
     gateway/run.py \
     plugins/platforms/discord/adapter.py \
     plugins/platforms/discord/presence.py \
     tools/web_tools.py \
     tests/gateway/test_discord_presence.py \
     tests/gateway/test_discord_presence_integration.py \
+    tests/hermes_cli/test_gateway_restart_loop.py \
     tests/tools/test_web_backend_fail_closed.py
   PYTHONPATH="$worktree" "$python_bin" -m pytest -q \
     -W error::ResourceWarning \
     tests/gateway/test_discord_presence.py \
     tests/gateway/test_discord_presence_integration.py \
+    tests/hermes_cli/test_gateway_restart_loop.py \
     tests/tools/test_web_backend_fail_closed.py \
     tests/tools/test_web_providers.py \
     tests/tools/test_web_tools_config.py

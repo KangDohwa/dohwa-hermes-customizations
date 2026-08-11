@@ -1,0 +1,60 @@
+diff --git a/cron/lifecycle_guard.py b/cron/lifecycle_guard.py
+index 6c7a5eaad..b8b079c0d 100644
+--- a/cron/lifecycle_guard.py
++++ b/cron/lifecycle_guard.py
+@@ -258,7 +258,7 @@ def _read_referenced_script(path: Path) -> tuple[Optional[str], bool]:
+     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+     try:
+         descriptor = os.open(path, flags)
+-    except OSError:
++    except (OSError, ValueError):
+         return None, False
+     try:
+         metadata = os.fstat(descriptor)
+@@ -279,7 +279,7 @@ def _read_referenced_script(path: Path) -> tuple[Optional[str], bool]:
+     # #76762). Treat it as "nothing to scan" rather than unsafe: a binary
+     # executed by the user is not a referenced *shell script*.
+     if b"\x00" in data:
+-        return None, False
++        return "", False
+     if len(data) > _MAX_REFERENCED_SCRIPT_BYTES:
+         return None, True
+     return data.decode("utf-8", errors="replace"), False
+@@ -327,7 +327,7 @@ def _contains_unsafe_gateway_action(
+         if script_text is None and read_remote_script is not None:
+             # Local path missing; try the remote backend if one is available.
+             script_text = read_remote_script(str(script_path))
+-        if not script_text:
++        if not script_text or "\x00" in script_text:
+             continue
+         # Relative references inside a script resolve against that script's
+         # directory, not the original command's cwd.
+diff --git a/tests/hermes_cli/test_gateway_restart_loop.py b/tests/hermes_cli/test_gateway_restart_loop.py
+index bd90e9913..08d445fbf 100644
+--- a/tests/hermes_cli/test_gateway_restart_loop.py
++++ b/tests/hermes_cli/test_gateway_restart_loop.py
+@@ -690,8 +690,23 @@ class TestLifecycleGuardModule:
+         from cron.lifecycle_guard import (
+             contains_gateway_lifecycle_command_or_referenced_script,
+         )
++
++        def unexpected_remote(_path):
++            pytest.fail("local binary must not fall back to a remote read")
++
++        result = contains_gateway_lifecycle_command_or_referenced_script(
++            '/usr/bin/python3 -c "print(1)"',
++            read_remote_script=unexpected_remote,
++        )
++        assert result is False
++
++    def test_remote_binary_payload_does_not_crash_guard(self):
++        from cron.lifecycle_guard import (
++            contains_gateway_lifecycle_command_or_referenced_script,
++        )
+         result = contains_gateway_lifecycle_command_or_referenced_script(
+-            '/usr/bin/python3 -c "print(1)"'
++            '/remote/python -c "print(1)"',
++            read_remote_script=lambda _path: "/tmp/\x00bad",
+         )
+         assert result is False
+ 
