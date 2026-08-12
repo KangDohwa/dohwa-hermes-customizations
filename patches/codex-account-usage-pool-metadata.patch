@@ -1,0 +1,86 @@
+diff --git a/agent/account_usage.py b/agent/account_usage.py
+index b7abb18..52c8ada 100644
+--- a/agent/account_usage.py
++++ b/agent/account_usage.py
+@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional
+ import httpx
+ 
+ from agent.anthropic_adapter import _is_oauth_token, resolve_anthropic_token
+-from hermes_cli.auth import AuthError, _read_codex_tokens, resolve_codex_runtime_credentials
++from hermes_cli.auth import AuthError, _decode_jwt_claims, _read_codex_tokens, resolve_codex_runtime_credentials
+ from hermes_cli.runtime_provider import resolve_runtime_provider
+ 
+ if TYPE_CHECKING:
+@@ -449,6 +449,13 @@ def _resolve_codex_usage_url(base_url: str) -> str:
+     return _codex_backend_urls(base_url)[0]
+ 
+ 
++def _codex_account_id_from_token(token: str) -> Optional[str]:
++    claims = _decode_jwt_claims(token)
++    auth_claim = claims.get("https://api.openai.com/auth")
++    account_id = auth_claim.get("chatgpt_account_id") if isinstance(auth_claim, dict) else None
++    return account_id.strip() if isinstance(account_id, str) and account_id.strip() else None
++
++
+ def _resolve_codex_usage_credentials(
+     base_url: Optional[str],
+     api_key: Optional[str],
+@@ -462,7 +469,7 @@ def _resolve_codex_usage_credentials(
+     """
+     explicit_key = str(api_key or "").strip()
+     if explicit_key:
+-        return explicit_key, str(base_url or "").strip(), None
++        return explicit_key, str(base_url or "").strip(), _codex_account_id_from_token(explicit_key)
+ 
+     # Tier 2: the native runtime resolver. It ALREADY falls back to the
+     # credential pool when the singleton is empty (see
+@@ -481,30 +488,44 @@ def _resolve_codex_usage_credentials(
+     # otherwise-usable resolver credential and force a header-less pool fallback.
+     try:
+         creds = resolve_codex_runtime_credentials(refresh_if_expiring=True)
++        token = creds["api_key"]
++        if creds.get("source") == "credential_pool":
++            from agent.credential_pool import load_pool
++
++            entry = load_pool("openai-codex").select()
++            if entry is None:
++                raise RuntimeError("No available openai-codex credential in credential pool")
++            token = entry.runtime_api_key
++            return (
++                token,
++                str(entry.runtime_base_url or creds.get("base_url", "") or "").strip(),
++                _codex_account_id_from_token(token),
++            )
++
++        token_account_id = _codex_account_id_from_token(token)
+         account_id: Optional[str] = None
+         try:
+             token_data = _read_codex_tokens()
+             tokens = token_data.get("tokens") or {}
+             account_id = str(tokens.get("account_id", "") or "").strip() or None
+         except AuthError:
+-            # Pool-only creds carry no singleton account_id; header is optional.
+             logger.debug("codex ▸ /usage account_id read failed (best-effort)", exc_info=True)
+-        return creds["api_key"], str(creds.get("base_url", "") or "").strip(), account_id
++        return token, str(creds.get("base_url", "") or "").strip(), token_account_id or account_id
+     except AuthError:
+         logger.debug("codex ▸ /usage runtime resolver returned no creds; trying pool", exc_info=True)
+ 
+     # Tier 3: direct pool select. Reached only when the resolver itself raises
+     # AuthError (e.g. singleton missing AND its own pool read found nothing at
+     # resolve time, but a pool entry is usable now). Pool credentials have no
+-    # account_id concept, so the ChatGPT-Account-Id header is intentionally
+-    # omitted here.
++    # separate account_id field, so derive it from the selected OAuth JWT.
+     from agent.credential_pool import load_pool
+ 
+     pool = load_pool("openai-codex")
+     entry = pool.select()
+     if entry is None:
+         raise RuntimeError("No available openai-codex credential in credential pool")
+-    return entry.runtime_api_key, str(entry.runtime_base_url or base_url or "").strip(), None
++    token = entry.runtime_api_key
++    return token, str(entry.runtime_base_url or base_url or "").strip(), _codex_account_id_from_token(token)
+ 
+ 
+ def _fetch_codex_account_usage(

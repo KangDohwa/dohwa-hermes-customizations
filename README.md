@@ -38,6 +38,19 @@ as a local result, rejects NUL-bearing remote script payloads, and catches
 that a local binary never falls through to a remote read and that remote NUL
 payloads fail safely without crashing the guard.
 
+## Codex account Usage credential coupling
+
+`patches/codex-account-usage-pool-metadata.patch` keeps the OAuth token and
+ChatGPT account metadata used for an account Usage request coupled to the same
+credential-pool entry. When the runtime resolver reports a pool source, the
+patch reselects one currently usable entry instead of combining a stale token
+with singleton metadata. Account IDs are derived from the selected OAuth JWT
+when available and omitted for opaque tokens.
+
+`tests/test_codex_account_usage_pool_metadata.py` verifies explicit-token,
+runtime-pool, opaque-token, and direct-pool behavior. It intentionally does not
+add credential rotation or retry behavior.
+
 ## Explicit web backend fail-closed behavior
 
 `patches/explicit-web-backend-fail-closed.patch` preserves explicit
